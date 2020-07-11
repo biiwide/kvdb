@@ -9,13 +9,24 @@ Usage:
 ```"
   (:require [biiwide.kvdb :as kvdb]
             [biiwide.kvdb.protocols :as proto]
+            [#?(:clj clojure.pprint :cljs cljs.pprint)
+             :refer [cl-format]]
             [clojure.spec.alpha :as s]
             [clojure.spec.test.alpha :as stest]
             [clojure.string :as string]
-            [clojure.test :refer [is]]
+            [#?(:clj clojure.test :cljs cljs.test)
+             :refer [is]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties
-             :refer [for-all]]))
+             :refer [for-all]])
+  #?(:clj (:import (clojure.lang ExceptionInfo)))
+  #?(:cljs (:require-macros [biiwide.kvdb.proto.verification
+                             :refer [and-let
+                                     instrument-kvdb!
+                                     unstrument-kvdb!
+                                     instrument-var!
+                                     unstrument-var!
+                                     without-instrumentation]])))
 
 
 (defn instrumentable-kvdb-syms []
@@ -29,13 +40,11 @@ Usage:
 (defn ^:private fnspec? [x]
   (or (:args x) (:ret x)))
 
-(def ^:private ->sym @#'s/->sym)
-
-(defn ^:private checked-fn?
+(defn checked-fn?
   [f]
   (boolean (::checked-fn (meta f))))
 
-(defn ^:private unchecked-fn
+(defn unchecked-fn
   [f]
   (::checked-fn (meta f) f))
 
@@ -46,7 +55,7 @@ Usage:
   `(binding [*instrumentation-enabled* false]
      ~@body))
 
-(defn ^:private checked-fn
+(defn checked-fn
   [f fsym fnspec]
   (cond (not (fnspec? fnspec)) f
         (checked-fn? f) (recur (unchecked-fn f) fsym fnspec)
@@ -56,8 +65,8 @@ Usage:
                     (let [conformed (when spec (s/conform spec value))]
                       (if (= ::s/invalid conformed)
                         (throw (ex-info
-                                 (format "%s %s did not conform to spec"
-                                         phase fsym )
+                                 (cl-format nil "~a ~a did not conform to spec"
+                                            phase fsym)
                                  (-> (assoc (s/explain-data* spec [] [] [] value)
                                             ::s/spec (s/describe spec)
                                             ::s/fn fsym
@@ -78,35 +87,41 @@ Usage:
                     ret))
                 (vary-meta assoc ::checked-fn f))))))
 
-(defn instrument-var!
+(defmacro instrument-var!
   "Similar to clojure.spec.test.alpha/instrument! but conforms and validates
 both input and output using :args, :ret, & :fn specs."
-  [v]
-  {:pre [(var? v)]}
-  (alter-var-root v checked-fn (->sym v) (s/get-spec (->sym v)))
-  v)
+  [fsym]
+  #?(:clj `(alter-var-root (var ~fsym) checked-fn '~fsym (s/get-spec '~fsym))
+     :cljs `(set! ~fsym (checked-fn ~fsym '~fsym (s/get-spec '~fsym)))))
 
-(defn instrument-kvdb!
+#_(def ^:private resolve-sym
+  #?(:clj resolve
+     :cljs (fn resolve-sym [sym]
+             (ns-resolve (symbol (or (namespace sym)
+                                     (str *ns*)))
+                         (symbol (name sym))))))
+
+(defmacro instrument-kvdb!
   "Similar to clojure.spec.test.alpha/instrument! but conforms and validates
 both input and output using :args, :ret, & :fn specs."
   ([]
-    (instrument-kvdb! (instrumentable-kvdb-syms)))
+   `(instrument-kvdb! ~(instrumentable-kvdb-syms)))
   ([sym-or-syms]
-    (vec (for [sym (as-seq sym-or-syms)]
-           (instrument-var! (resolve sym))))))
+   `(do ~@(for [sym (as-seq sym-or-syms)]
+            `(instrument-var! ~sym)))))
 
-(defn unstrument-var!
-  [v]
-  (alter-var-root v unchecked-fn)
-  v)
+(defmacro unstrument-var!
+  [vsym]
+  #?(:clj `(alter-var-root (var ~vsym) unchecked-fn)
+     :cljs `(set! ~vsym (unchecked-fn ~vsym))))
 
-(defn unstrument-kvdb!
+(defmacro unstrument-kvdb!
   "Removes spec instrumentation installed by instrument-kvdb!"
   ([]
-    (unstrument-kvdb! (instrumentable-kvdb-syms)))
+   `(unstrument-kvdb! ~(instrumentable-kvdb-syms)))
   ([sym-or-syms]
-    (doseq [sym (as-seq sym-or-syms)]
-      (unstrument-var! (resolve sym)))))
+   `(do ~@(for [sym (as-seq sym-or-syms)]
+            `(unstrument-var! ~sym)))))
 
 (instrument-kvdb!)
 
@@ -139,7 +154,8 @@ both input and output using :args, :ret, & :fn specs."
 
 
 (defn ^:private lazyseq? [x]
-  (instance? clojure.lang.LazySeq x))
+  #?(:clj (instance? clojure.lang.LazySeq x)
+     :cljs (instance? cljs.core/LazySeq x)))
 
 
 (defn readable-kvdb-properties
@@ -199,31 +215,31 @@ both input and output using :args, :ret, & :fn specs."
       (is (kvdb/mutable-kvdb? kvdb)
           "The generated database is a MutableKVDB.")
       (is (nil? (kvdb/fetch kvdb new-key))
-          (format "The new key \"%s\" is not present." new-key))
+          (cl-format nil "The new key ~s is not present." new-key))
 
       (is (kvdb/key-not-found-exception?
-            (is (thrown? Exception (kvdb/replace! kvdb new-key 99 value-one))))
+            (is (thrown? ExceptionInfo (kvdb/replace! kvdb new-key 99 value-one))))
           "A key-not-found exception is thrown when replacing a missing key.")
 
       (is (kvdb/key-not-found-exception?
-            (is (thrown? Exception (kvdb/remove! kvdb new-key 99))))
+            (is (thrown? ExceptionInfo (kvdb/remove! kvdb new-key 99))))
           "A key-not-found exception is thrown when removing a missing key.")
 
       [created (kvdb/create! kvdb new-key value-one)]
       (is (kvdb/entry? created)
           "Creating an entry returns the new entry.")
       (is (kvdb/key-collision-exception?
-            (is (thrown? Exception (kvdb/create! kvdb new-key value-one))))
+            (is (thrown? ExceptionInfo (kvdb/create! kvdb new-key value-one))))
           "A key-collision exception is thrown when creating an existing key.")
 
       [revision-one (kvdb/revision created)]
       (is (kvdb/revision-mismatch-exception?
-            (is (thrown? Exception
+            (is (thrown? ExceptionInfo
                   (kvdb/replace! kvdb new-key (inc revision-one) value-two))
                 "Replacing an entry using the wrong revision throws an exception."))
           "A revision-mismatch exception is thrown.")
       (is (kvdb/revision-mismatch-exception?
-            (is (thrown? Exception
+            (is (thrown? ExceptionInfo
                   (kvdb/replace! kvdb new-key (+ counter revision-one) value-two))
                 "Replacing an entry using the wrong revision throws an exception."))
           "A revision-mismatch exception is thrown.")
@@ -239,7 +255,7 @@ both input and output using :args, :ret, & :fn specs."
 
       [revision-two (kvdb/revision replaced)]
       (is (kvdb/revision-mismatch-exception?
-            (is (thrown? Exception (kvdb/remove! kvdb new-key revision-one))
+            (is (thrown? ExceptionInfo (kvdb/remove! kvdb new-key revision-one))
                 "Replacing an entry using the wrong revision throws an exception."))
           "A revision-mismatch exception is thrown.")
 
@@ -252,8 +268,8 @@ both input and output using :args, :ret, & :fn specs."
           "The value of the removed entry matches the last value")
 
       (is (nil? (kvdb/fetch kvdb new-key))
-          (format "The removed key \"%s\" is no longer present."
-                  new-key))
+          (cl-format nil "The removed key ~s is no longer present."
+                     new-key))
       )))
 
 

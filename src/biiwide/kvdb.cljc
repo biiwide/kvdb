@@ -2,7 +2,11 @@
   (:refer-clojure :exclude [key remove replace])
   (:require [biiwide.kvdb.protocols :as proto]
             [clojure.core :as core]
-            [clojure.spec.alpha :as s]))
+            [#?(:clj  clojure.pprint
+                :cljs cljs.pprint) :as pprint
+              :refer [cl-format]]
+            [clojure.spec.alpha :as s])
+  #?(:clj (:import (clojure.lang ExceptionInfo))))
 
 
 (defmacro ^:private maybe
@@ -104,6 +108,16 @@
   [x]
   (satisfies? proto/KVDBable x))
 
+(defn illegal-argument
+  "Construct an exception for unusable arguments."
+  [message & params]
+  (ex-info (apply cl-format nil message params)
+           {:type ::illegal-argument}))
+
+(defn illegal-argument-exception?
+  [x]
+  (= ::illegal-argument (:type (ex-data x))))
+
 
 (defn to-kvdb
   "Coerce a potential KVDB value into a full KVDB."
@@ -111,8 +125,8 @@
   (cond (kvdb? x)     x
         (kvdbable? x) (proto/to-kvdb x)
         :else
-        (throw (IllegalArgumentException.
-                  (format "Cannot create a KVDB from %s" (class x))))))
+        (throw (illegal-argument "Cannot create a KVDB from ~s"
+                                 (type x)))))
 
 
 (s/fdef readable-kvdb?
@@ -146,9 +160,9 @@
 Either nil or a provided missing-value will be returned
 when the entry is not found."
   ([readable-kvdb key]
-    (fetch readable-kvdb key nil))
+   (fetch readable-kvdb key nil))
   ([readable-kvdb key missing-value]
-    (proto/fetch readable-kvdb key missing-value)))
+   (proto/fetch readable-kvdb key missing-value)))
 
 
 (s/fdef entries
@@ -276,12 +290,12 @@ remove! an entry where the current revision does not match
 the supplied revision.
 This typically happens when a concurrent modification to
 the entry has occured."
-  [kvdb action k actual-rev expected-rev]
+  [kvdb action key actual-rev expected-rev]
   (ex-info "Actual revision did not match expected revision."
            {:type              ::revision-mismatch
             :kvdb              kvdb
             :action            action
-            :key               k
+            :key               key
             :actual-revision   actual-rev
             :expected-revision expected-rev}))
 
@@ -307,17 +321,18 @@ the entry has occured."
   "Construct a key not found exception.
 This exception is throw when attempting to replace! or
 remove! an entry that does not exist."
-  [kvdb action k]
+  [kvdb action key]
   (ex-info "Key not found in database."
            {:type   ::key-not-found
             :kvdb   kvdb
             :action action
-            :key    k}))
+            :key    key}))
 
 
 (defn ^:private exception?
   [x]
-  (instance? Exception x))
+  #?(:clj (instance? Exception x)
+     :cljs (instance? js/Error x)))
 
 
 (s/fdef exceeded-transact-attempts-exception?
@@ -344,12 +359,12 @@ remove! an entry that does not exist."
 This exception is thrown when an attempt to transact! an
 entry exceeds the maximum number of attempts due to
 concurrent modifications."
-  [kvdb k f attempts & [cause]]
+  [kvdb key f attempts & [cause]]
   (ex-info "Exceeded maximum transact attempts."
            {:type     ::exceeded-transact-attempts
             :kvdb     kvdb
             :action   ::transact-values!
-            :key      k
+            :key      key
             :tx       f
             :attempts attempts}
             cause))
@@ -369,7 +384,7 @@ concurrent modifications."
   :args (s/cat :any any?)
   :ret  removal?)
 
-(definline removal
+(defn removal
   "Returns a token indicating a transacted value should be removed.
 Examples:
  (kvdb/transact! db \"abc\" kvdb/removal)
@@ -382,30 +397,30 @@ Examples:
 
 
 (defn ^:private apply-tx
-  [kvdb k f]
-  (let [missing-v (Object.)
-        ent (proto/fetch kvdb k missing-v)
+  [kvdb key f]
+  (let [missing-v #?(:clj (Object.) :cljs (js-obj))
+        ent (proto/fetch kvdb key missing-v)
         missing? (identical? missing-v ent)
         old-val (if missing? nil (value ent))
         new-val (f old-val)]
     (cond missing?
           (if (removal? new-val)
             [nil nil]
-            (try [nil (create! kvdb k new-val)]
-              (catch Exception ex
+            (try [nil (create! kvdb key new-val)]
+              (catch ExceptionInfo ex
                 (cond (key-collision-exception? ex) ex
                       :else (throw ex)))))
           (removal? new-val)
-          (try [(remove! kvdb k (revision ent)) nil]
-            (catch Exception ex
+          (try [(remove! kvdb key (revision ent)) nil]
+            (catch ExceptionInfo ex
               (cond (revision-mismatch-exception? ex) ex
                     (key-not-found-exception? ex) ex
                     :else (throw ex))))
           (= old-val new-val)
           [old-val old-val]
           :else
-          (try [ent (replace! kvdb k (revision ent) new-val)]
-            (catch Exception ex
+          (try [ent (replace! kvdb key (revision ent) new-val)]
+            (catch ExceptionInfo ex
               (cond (revision-mismatch-exception? ex) ex
                     (key-not-found-exception? ex) ex
                     :else (throw ex)))))))
@@ -431,27 +446,39 @@ Examples:
                     :missing (nil? ret-val)))))
 
 (defn transact-values!
-  ([kvdb k f a]
-   (transact-values! kvdb k #(f % a)))
-  ([kvdb k f a b]
-   (transact-values! kvdb k #(f % a b)))
-  ([kvdb k f a b c]
-   (transact-values! kvdb k #(f % a b c)))
-  ([kvdb k f a b c & more-args]
-   (transact-values! kvdb k #(apply f % a b c more-args)))
-  ([kvdb k f]
-   (let [max-attempts *max-transact-attempts*]
+  "Atomically alter the value of an entry, similar to clojure.core/swap!.
+The value for a key will be read, passed to the provided function, and
+saved back to the database.
+* When the entry is modified conconcurrently, the process will be repeated
+until either success or the maximum number of attempts has been reached.
+* Transacting an entry that does not exist will create a new entry.
+* If the value is not modified by the provided function, then no action will
+be taken.
+* The kvdb/removal function can be used to remove an entry from a transacting
+function."
+  ([kvdb key f a]
+   (transact-values! kvdb key #(f % a)))
+  ([kvdb key f a b]
+   (transact-values! kvdb key #(f % a b)))
+  ([kvdb key f a b c]
+   (transact-values! kvdb key #(f % a b c)))
+  ([kvdb key f a b c & more-args]
+   (transact-values! kvdb key #(apply f % a b c more-args)))
+  ([kvdb key f]
+   (let [max-attempts *max-transact-attempts*
+         rand-pause (fn [] #?(:clj (Thread/sleep 0 (rand-int 999)))
+                              :cljs (do (max (range (rand-int 9999))) nil))]
      (loop [remaining-attempts max-attempts
             last-exception     nil]
        (if (pos? remaining-attempts)
-         (let [result (apply-tx kvdb k f)]
+         (let [result (apply-tx kvdb key f)]
            (if (exception? result)
-             (do (Thread/sleep 0 (rand-int 999))
+             (do (rand-pause)
                  (recur (dec remaining-attempts) result))
              result))
          (throw
            (exceeded-transact-attempts
-             kvdb k f max-attempts last-exception)))))))
+             kvdb key f max-attempts last-exception)))))))
 
 
 (s/fdef transact!
@@ -479,9 +506,8 @@ Examples:
                     (symbol? max-attempts)
                     `((assert (pos? ~max-attempts)
                               "Attempts must be a positive integer"))
-                    :else (throw (IllegalArgumentException.
-                                   (format "Invalid max-attempts %s"
-                                           (pr-str max-attempts)))))]
+                    :else (throw (illegal-argument "Invalid max-attempts ~s"
+                                                   max-attempts)))]
   `(do ~@check
        (binding [*max-transact-attempts* ~max-attempts]
          ~@body))))
@@ -517,9 +543,9 @@ Examples:
 An exclusive-start-key of nil will start paging from the
 first entry."
   ([pageable-kvdb]
-    (page pageable-kvdb nil nil))
+   (page pageable-kvdb nil nil))
   ([pageable-kvdb exclusive-start-key page-limit]
-    (proto/page pageable-kvdb exclusive-start-key page-limit)))
+   (proto/page pageable-kvdb exclusive-start-key page-limit)))
 
 
 (s/fdef pageseq
@@ -587,49 +613,43 @@ first entry."
 (defn ^:private enrich-map-entry
   [[k v]]
   (when-not (string? k)
-    (throw (IllegalArgumentException.
-             (format "Invalid key present (%s)." (pr-str k)))))
+    (throw (illegal-argument "Invalid key present (~s)." k)))
   (when-not (map? v)
-    (throw (IllegalArgumentException.
-             (format "Invalid value present (%s)." (type v)))))
+    (throw (illegal-argument "Invalid value present (~s)."
+                             (type v))))
   [k (entry k v 0)])
 
-(def ^:private always-nil
-  (constantly nil))
 
-(def ^:private always-false
-  (constantly false))
-
-(extend nil
+(extend-type nil
   proto/KVDBEntry
-  {:entry?   always-false
-   :key      always-nil
-   :value    always-nil
-   :revision always-nil}
+  (entry? [_] false)
+  (key [_] nil)
+  (value [_] nil)
+  (revision [_] nil)
   proto/ReadableKVDB
-  {:readable-kvdb? always-false}
+  (readable-kvdb? [_] false)
   proto/MutableKVDB
-  {:mutable-kvdb? always-false}
+  (mutable-kvdb? [_] false)
   proto/PageableKVDB
-  {:pageable-kvdb? always-false}
+  (pageable-kvdb? [_] false)
   proto/OverridableKVDB
-  {:overridable-kvdb? always-false})
+  (overridable-kvdb? [_] false))
 
-
-(extend Object
+(extend-type
+  #?(:clj Object :cljs default)
   proto/KVDBEntry
-  {:entry?   always-false
-   :key      always-nil
-   :value    always-nil
-   :revision always-nil}
+  (entry? [_] false)
+  (key [_] nil)
+  (value [_] nil)
+  (revision [_] nil)
   proto/ReadableKVDB
-  {:readable-kvdb? always-false}
+  (readable-kvdb? [_] false)
   proto/MutableKVDB
-  {:mutable-kvdb? always-false}
+  (mutable-kvdb? [_] false)
   proto/PageableKVDB
-  {:pageable-kvdb? always-false}
+  (pageable-kvdb? [_] false)
   proto/OverridableKVDB
-  {:overridable-kvdb? always-false})
+  (overridable-kvdb? [_] false))
 
 
 (extend-type clojure.lang.IPersistentMap
@@ -652,10 +672,10 @@ first entry."
   proto/ReadableKVDB
   (readable-kvdb? [x]
     (true? (::readable-kvdb (meta x))))
-  (fetch [m k missing-v]
-    (if-some [e (find m k)]
+  (fetch [m key missing-val]
+    (if-some [e (find m key)]
       (val e)
-      missing-v))
+      missing-val))
   (entries [m]
     (vals m)))
 

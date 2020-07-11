@@ -66,7 +66,7 @@
     (let [v @a]
       (if (proto/pageable-kvdb? v)
         (proto/page v exclusive-start-key limit)
-        (throw (RuntimeException. "Method not supported")))))
+        (throw (ex-info "Method not supported" {})))))
 
   proto/OverridableKVDB
   (overridable-kvdb? [a]

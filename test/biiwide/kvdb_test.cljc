@@ -4,15 +4,26 @@
             [biiwide.kvdb.atomic :as a]
             [biiwide.kvdb.generators :as kgen]
             [biiwide.kvdb.protocols :as proto]
-            [biiwide.kvdb.proto.verification :as v
-            :refer [and-let instrument-kvdb! kvdb-properties]]
+            #?(:clj  [biiwide.kvdb.proto.verification :as v
+                      :refer [and-let instrument-kvdb! kvdb-properties]]
+               :cljs [biiwide.kvdb.proto.verification :as v
+                      :include-macros true
+                      :refer [kvdb-properties]
+                      :refer-macros [and-let instrument-kvdb!]])
+            #?(:clj  [clojure.pprint :refer [cl-format]]
+               :cljs [cljs.pprint :refer [cl-format]])
             [clojure.spec.alpha :as s]
-            [clojure.spec.test.alpha :as stest]
-            [clojure.test :refer :all]
+            #?(:clj  [clojure.test :refer [deftest is are]]
+               :cljs [cljs.test :refer-macros [deftest is are]])
             [clojure.test.check.clojure-test
-             :refer [defspec]]
+             #?@(:clj (:refer [defspec])
+                 :cljs (:refer-macros [defspec]))]
             [clojure.test.check.generators :as gen]
-            [clojure.test.check.properties :as prop]))
+            [clojure.test.check.properties :as prop
+             #?@(:cljs (:include-macros true))]
+            )
+  #?(:clj (:import (clojure.lang ExceptionInfo)))
+  )
 
 
 (instrument-kvdb!)
@@ -31,9 +42,8 @@
 
 
 (deftest test-entry-invalid
-  (stest/instrument [#'kvdb/entry])
   (are [k v rev]
-    (is (thrown? Exception
+    (is (thrown? ExceptionInfo
           (kvdb/entry k v rev)))
 
     :k  {}  0
@@ -159,31 +169,32 @@
 
 
 (deftest test-invalid-kvdb-source-value
-  (are [m ex-class ex-message]
-    (is (thrown-with-msg? ex-class ex-message
-          (kvdb/to-kvdb m)))
+  (are [m ex-message]
+    (is (kvdb/illegal-argument-exception?
+          (is (thrown-with-msg? ExceptionInfo ex-message
+                (kvdb/to-kvdb m)))))
 
-    nil                      RuntimeException          #"(?i)\bCannot create a KVDB\b"
-    true                     RuntimeException          #"(?i)\bCannot create a KVDB\b"
-    5555                     RuntimeException          #"(?i)\bCannot create a KVDB\b"
-    "{\"abc\" 1}"            RuntimeException          #"(?i)\bCannot create a KVDB\b"
-    []                       RuntimeException          #"(?i)\bCannot create a KVDB\b"
+    nil                      #"(?i)\bCannot create a KVDB\b"
+    true                     #"(?i)\bCannot create a KVDB\b"
+    5555                     #"(?i)\bCannot create a KVDB\b"
+    "{\"abc\" 1}"            #"(?i)\bCannot create a KVDB\b"
+    []                       #"(?i)\bCannot create a KVDB\b"
 
-    {nil {}}                 IllegalArgumentException  #"(?i)\bInvalid key\b"
-    {:one {}}                IllegalArgumentException  #"(?i)\bInvalid key\b"
-    {1234 {}}                IllegalArgumentException  #"(?i)\bInvalid key\b"
-    {"abc" nil}              IllegalArgumentException  #"(?i)\bInvalid value\b"
-    {"def" 111}              IllegalArgumentException  #"(?i)\bInvalid value\b"
-    {"ghi" "b"}              IllegalArgumentException  #"(?i)\bInvalid value\b"
+    {nil {}}                 #"(?i)\bInvalid key\b"
+    {:one {}}                #"(?i)\bInvalid key\b"
+    {1234 {}}                #"(?i)\bInvalid key\b"
+    {"abc" nil}              #"(?i)\bInvalid value\b"
+    {"def" 111}              #"(?i)\bInvalid value\b"
+    {"ghi" "b"}              #"(?i)\bInvalid value\b"
 
-    (sorted-map nil {})      IllegalArgumentException  #"(?i)\bInvalid key\b"
-    (sorted-map true {})     IllegalArgumentException  #"(?i)\bInvalid key\b"
-    (sorted-map 123 {})      IllegalArgumentException  #"(?i)\bInvalid key\b"
-    (sorted-map :two {})     IllegalArgumentException  #"(?i)\bInvalid key\b"
-    (sorted-map "111" nil)   IllegalArgumentException  #"(?i)\bInvalid value\b"
-    (sorted-map "222" true)  IllegalArgumentException  #"(?i)\bInvalid value\b"
-    (sorted-map "333" 444)   IllegalArgumentException  #"(?i)\bInvalid value\b"
-    (sorted-map "444" "abc") IllegalArgumentException  #"(?i)\bInvalid value\b"
+    (sorted-map nil {})      #"(?i)\bInvalid key\b"
+    (sorted-map true {})     #"(?i)\bInvalid key\b"
+    (sorted-map 123 {})      #"(?i)\bInvalid key\b"
+    (sorted-map :two {})     #"(?i)\bInvalid key\b"
+    (sorted-map "111" nil)   #"(?i)\bInvalid value\b"
+    (sorted-map "222" true)  #"(?i)\bInvalid value\b"
+    (sorted-map "333" 444)   #"(?i)\bInvalid value\b"
+    (sorted-map "444" "abc") #"(?i)\bInvalid value\b"
     ))
 
 
@@ -192,10 +203,10 @@
                  new-v kgen/value]
     (and-let
       [db (kvdb/to-kvdb (atom {}))]
-      (is (thrown-with-msg? Exception #"Boom!"
+      (is (thrown-with-msg? ExceptionInfo #"Boom!"
             (kvdb/transact-values! db new-k
               (fn [v] (when (nil? v)
-                        (throw (Exception. "Boom!"))))))
+                        (throw (ex-info "Boom!" {}))))))
           "Unexpected exceptions are rethrown")
 
       [result (apply kvdb/transact-values!
@@ -329,14 +340,14 @@
                   :else      (do (swap! counters update `proto/remove! inc)
                                  (kvdb/removal v))))]
       (is (kvdb/exceeded-transact-attempts-exception?
-            (is (thrown? Exception
+            (is (thrown? ExceptionInfo
                   (kvdb/with-max-transact-attempts attempts
                     (do (kvdb/transact-values! db k tx)
                         (kvdb/transact-values! db k tx)
                         (kvdb/transact-values! db k tx)))))))
       (is (= attempts (get @counters failing-op))
-          (format "Expected attempts %s on %s but %s"
-                  attempts failing-op @counters)))))
+          (cl-format nil "Expected attempts ~s on ~s but ~s"
+                     attempts failing-op @counters)))))
 
 
 (defn throws
@@ -348,34 +359,34 @@
 (deftest transact-values-exception-handling 50
   (and-let
     [db (kvdb/to-kvdb (atom {}))]
-    (is (thrown-with-msg? Exception #"Boom TX"
+    (is (thrown-with-msg? ExceptionInfo #"Boom TX"
           (kvdb/transact-values! db "abc"
             (fn [v] (when (nil? v)
-                      (throw (Exception. "Boom TX"))))))
+                      (throw (ex-info "Boom TX" {}))))))
         "Unexpected transaction exceptions are rethrown")
 
-    (is (thrown-with-msg? Exception #"Not Created"
+    (is (thrown-with-msg? ExceptionInfo #"Not Created"
           (kvdb/transact!
             (kvdb/override db `proto/create!
-              (throws (Exception. "Not Created")))
+              (throws (ex-info "Not Created" {})))
             "abc"
             (constantly {:wrong "value"})))
         "Unexpected exceptions when creating an entry are rethrown.")
 
     [_ (kvdb/transact! db "abc" (constantly {:abc "DEF" :x 1}))]
 
-    (is (thrown-with-msg? Exception #"Not Replaced"
+    (is (thrown-with-msg? ExceptionInfo #"Not Replaced"
           (kvdb/transact!
             (kvdb/override db `proto/replace!
-              (throws (Exception. "Not Replaced")))
+              (throws (ex-info "Not Replaced" {})))
             "abc"
             update :x inc))
         "Unexpected exceptions when replacing an entry are rethrown.")
 
-    (is (thrown-with-msg? Exception #"Not Removed"
+    (is (thrown-with-msg? ExceptionInfo #"Not Removed"
           (kvdb/transact!
             (kvdb/override db `proto/remove!
-              (throws (Exception. "Not Removed")))
+              (throws (ex-info "Not Removed" {})))
             "abc"
             kvdb/removal))
         "Unexpected exceptions when updating an entry are rethrown.")

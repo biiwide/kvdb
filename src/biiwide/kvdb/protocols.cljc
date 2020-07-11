@@ -8,21 +8,23 @@
   (entry? [x])
   (key [entry])
   (value [entry])
-  (revision [entry]))
+  (revision [entry])
+  )
 
 
 (defprotocol KVDBable
   "The KVDBable protocol is supported by types that can be coerced into
 a KVDB instance."
   :extend-via-metadata true
-  (to-kvdb [x] "Convert a supported KVDB type into a full KVDB instance."))
+  (to-kvdb [x] "Convert a supported KVDB type into a full KVDB instance.")
+  )
 
 
 (defprotocol ReadableKVDB
   "The KVDB protocol defines common operations for key/value databases."
   :extend-via-metadata true
   (readable-kvdb? [x] "Test if a value supports the ReadableKVDB protocol.")
-  (fetch [kvdb k missing-value]
+  (fetch [kvdb key missing-value]
          "Retrieves the entry for a key from the database.
 Returns 'misising-value when the key is not present.
 Will only throw exceptions when unable to communicate with the database.")
