@@ -1,0 +1,4 @@
+{:lint-as {clojure.test.check.generators/let clojure.core/let
+           clojure.test.check.properties/for-all clojure.core/let}
+ :hooks {:analyze-call {biiwide.kvdb.verification/and-let hooks.and-let/and-let}}
+ }

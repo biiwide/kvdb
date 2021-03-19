@@ -382,13 +382,41 @@
     ))
 
 
-(defspec kvdb-map-spec 50
-  (prop/for-all [result (gen/bind (kgen/hashmap-kvdb)
-                                  kvdb-properties)]
-    result))
+(defn ->hashmap-kvdb
+  [entries]
+  (kvdb/to-kvdb (into {} entries)))
 
+(defspec kvdb-hashmap-spec 50
+  (kvdb-properties ->hashmap-kvdb))
+
+
+(defn ->treemap-kvdb
+  [entries]
+  (kvdb/to-kvdb (into (sorted-map) entries)))
 
 (defspec kvdb-treemap-spec 50
-  (prop/for-all [result (gen/bind (kgen/sortedmap-kvdb)
-                                  kvdb-properties)]
-    result))
+  (kvdb-properties ->treemap-kvdb))
+
+
+(defn ednize-vals
+  [m]
+  (zipmap (keys m)
+          (map pr-str (vals m))))
+
+
+(defn read-edn-vals
+  [m]
+  (zipmap (keys m)
+          (map read-string (vals m))))
+
+
+(defspec kvdb-coerced-spec 70
+  (kvdb-properties
+    (gen/fmap (fn [->kvdb]
+                #(kvdb/coerced (->kvdb (zipmap (keys %)
+                                               (map ednize-vals (vals %))))
+                               read-edn-vals
+                               ednize-vals))
+              (gen/elements [->hashmap-kvdb
+                             ->treemap-kvdb]))))
+

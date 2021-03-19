@@ -47,6 +47,17 @@
 
 
 (defspec kvdb-atom-spec 50
-  (prop/for-all [result (gen/bind (kgen/atomic-kvdb)
-                                  #(kvdb-properties % kgen/value))]
-    result))
+  (kvdb-properties
+    (gen/fmap (fn [mapify]
+                #(kvdb/to-kvdb (atom (mapify %))))
+              (gen/elements [(partial into {})
+                             (partial into (sorted-map))]))))
+
+
+(defspec kvdb-atom-readable-spec 50
+  (kvdb-properties #(kvdb/to-kvdb (atom (into {} %)))))
+
+
+(defspec kvdb-atom-pageable-spec 50
+  (kvdb-properties #(kvdb/to-kvdb (atom (into (sorted-map) %)))))
+
