@@ -1,14 +1,13 @@
 (ns biiwide.kvdb-test
   (:require [biiwide.kvdb :as kvdb
              :refer [to-kvdb]]
-            [biiwide.kvdb.atomic :as a]
-            [biiwide.kvdb.generators :as kgen]
+            [biiwide.kvdb.atomic]
+            [biiwide.kvdb.generators :as kvdb-gen]
             [biiwide.kvdb.protocols :as proto]
-            [biiwide.kvdb.proto.verification :as v
-            :refer [and-let instrument-kvdb! kvdb-properties]]
-            [clojure.spec.alpha :as s]
+            [biiwide.kvdb.verification :as v
+            :refer [and-let fmap-vals instrument-kvdb!]]
             [clojure.spec.test.alpha :as stest]
-            [clojure.test :refer :all]
+            [clojure.test :refer [are deftest is testing]]
             [clojure.test.check.clojure-test
              :refer [defspec]]
             [clojure.test.check.generators :as gen]
@@ -86,6 +85,59 @@
     321   (kvdb/entry "rev" {} 321)
     ))
 
+
+(deftest test-precondition-exception?
+  (let [db (to-kvdb {})]
+    (are [p? ex]
+      (p? (kvdb/precondition-exception? ex))
+
+      false? (Exception.)
+      false? (ex-info "Foo" {:type :something})
+      true?  (kvdb/key-collision db ::kvdb/create! "k")
+      true?  (kvdb/revision-mismatch db ::kvdb/replace! "k" 0 1)
+      true?  (kvdb/key-not-found db ::kvdb/remove! "k")
+      false? (kvdb/exceeded-transact-attempts db "k" identity 1)
+      )))
+
+
+(deftest test-key-collision-exception?
+  (let [db (to-kvdb {})]
+    (are [p? ex]
+      (p? (kvdb/key-collision-exception? ex))
+
+      false? (Exception.)
+      false? (ex-info "foo" {:type :abc})
+      true?  (kvdb/key-collision db ::kvdb/create! "k")
+      false? (kvdb/revision-mismatch db ::kvdb/replace! "k" 0 1)
+      false? (kvdb/key-not-found db ::kvdb/replace! "key")
+      false? (kvdb/exceeded-transact-attempts db "k" identity 1)
+      )))
+
+(deftest test-revision-mismatch-exception?
+  (let [db (to-kvdb {})]
+    (are [p? ex]
+      (p? (kvdb/revision-mismatch-exception? ex))
+
+      false? (Exception.)
+      false? (ex-info "foo" {:type :abc})
+      false? (kvdb/key-collision db ::kvdb/create! "k")
+      true?  (kvdb/revision-mismatch db ::kvdb/replace! "k" 0 1)
+      false? (kvdb/key-not-found db ::kvdb/replace! "key")
+      false? (kvdb/exceeded-transact-attempts db "k" identity 1)
+      )))
+
+(deftest test-key-not-found-exception?
+  (let [db (to-kvdb {})]
+    (are [p? ex]
+      (p? (kvdb/key-not-found-exception? ex))
+
+      false? (Exception.)
+      false? (ex-info "foo" {:type :abc})
+      false? (kvdb/key-collision db ::kvdb/create! "k")
+      false? (kvdb/revision-mismatch db ::kvdb/replace! "k" 0 1)
+      true?  (kvdb/key-not-found db ::kvdb/replace! "key")
+      false? (kvdb/exceeded-transact-attempts db "k" identity 1)
+      )))
 
 (deftest test-readable-kvdb?
   (are [p? v]
@@ -189,7 +241,7 @@
 
 (defspec transact-values-new-entry-spec 50
   (prop/for-all [new-k gen/string
-                 new-v kgen/value]
+                 new-v (kvdb-gen/value)]
     (and-let
       [db (kvdb/to-kvdb (atom {}))]
       (is (thrown-with-msg? Exception #"Boom!"
@@ -218,7 +270,7 @@
 
 (defspec transact-values-update-entry-spec 50
   (prop/for-all [k gen/string
-                 v kgen/value
+                 v (kvdb-gen/value)
                  field-k gen/keyword
                  field-v gen/simple-type-printable-equatable]
     (and-let
@@ -246,7 +298,7 @@
 
 (defspec transact-values-remove-entry-spec 50
   (prop/for-all [k gen/string
-                 v kgen/value]
+                 v (kvdb-gen/value)]
     (and-let
       [db (kvdb/to-kvdb (atom {}))
        remove-missing (kvdb/transact-values! db k kvdb/removal)]
@@ -382,13 +434,133 @@
     ))
 
 
-(defspec kvdb-map-spec 50
-  (prop/for-all [result (gen/bind (kgen/hashmap-kvdb)
-                                  kvdb-properties)]
-    result))
+;; HashMap
+(def hashmap-context
+  (gen/let [kvdb (kvdb-gen/readable-kvdb)]
+    (fn [prop]
+      (prop {:kvdb kvdb}))))
+
+(defspec hashmap-readable-properties
+  (v/within-context hashmap-context v/readable-kvdb-properties))
+
+(defspec hashmap-overridable-properties
+  (v/within-context hashmap-context v/overridable-kvdb-properties))
+
+;; SortedMap
+(def treemap-context
+  (gen/let [kvdb (kvdb-gen/pageable-kvdb)]
+    (fn [prop]
+      (prop {:kvdb kvdb}))))
+
+(defspec treemap-readable-properties
+  (v/within-context treemap-context v/readable-kvdb-properties))
+
+(defspec treemap-pageable-properties
+  (v/within-context treemap-context v/pageable-kvdb-properties))
+
+(defspec treemap-overridable-properties
+  (v/within-context treemap-context v/overridable-kvdb-properties))
+
+;; Coerced KVDB
+(defn ednize-value
+  [m]
+  {:edn (pr-str m)})
 
 
-(defspec kvdb-treemap-spec 50
-  (prop/for-all [result (gen/bind (kgen/sortedmap-kvdb)
-                                  kvdb-properties)]
-    result))
+(defn read-edn-value
+  [m]
+  (read-string
+    (or (get m :edn)
+        (get m "edn"))))
+
+
+(deftest coerced-kvdb-protocols
+  (testing "Coerced ReadableKVDB"
+    (are [p?]
+      (p? (kvdb/coerced (to-kvdb {}) {}))
+
+      kvdb/readable-kvdb?
+      (complement kvdb/pageable-kvdb?)
+      (complement kvdb/mutable-kvdb?)
+      kvdb/overridable-kvdb?))
+
+  (testing "Coerced PageableKVDB"
+    (are [p?]
+      (p? (kvdb/coerced (to-kvdb (sorted-map)) {}))
+
+      kvdb/readable-kvdb?
+      kvdb/pageable-kvdb?
+      (complement kvdb/mutable-kvdb?)
+      kvdb/overridable-kvdb?))
+
+  (testing "Coerced Mutable/ReadableKVDB"
+    (are [p?]
+      (p? (kvdb/coerced (to-kvdb (atom {})) {}))
+
+      kvdb/readable-kvdb?
+      (complement kvdb/pageable-kvdb?)
+      kvdb/mutable-kvdb?
+      kvdb/overridable-kvdb?))
+
+  (testing "Coerced Mutable/PageableKVDB"
+    (are [p?]
+      (p? (kvdb/coerced (to-kvdb (atom (sorted-map))) {}))
+
+      kvdb/readable-kvdb?
+      kvdb/pageable-kvdb?
+      kvdb/mutable-kvdb?
+      kvdb/overridable-kvdb?)))
+
+
+(defspec coerced-kvdb-coerce-on-create!-spec
+  (prop/for-all [k (kvdb-gen/key)
+                 v (kvdb-gen/value)]
+    (and-let
+      [coerced-db (kvdb/coerced (kvdb/to-kvdb (atom {}))
+                                {:uncoerce ednize-value
+                                 :coerce   read-edn-value})]
+      (is (= v (kvdb/value (kvdb/create! coerced-db k v))))
+
+      [primary-db (kvdb/pop-overrides coerced-db)
+       primary-v (kvdb/fetch primary-db k)]
+      (is (= [:edn] (keys primary-v)))
+      (is (string? (:edn primary-v)))
+      (is (= v (read-string (:edn primary-v))))
+      )))
+
+(defspec coerced-kvdb-coerce-on-replace!-spec
+  (prop/for-all [k  (kvdb-gen/key)
+                 v1 (kvdb-gen/value)
+                 v2 (kvdb-gen/value)]
+    (and-let
+      [coerced-db (kvdb/coerced (kvdb/to-kvdb (atom {}))
+                                {:uncoerce ednize-value
+                                 :coerce   read-edn-value})]
+      (is (= v1 (kvdb/value (kvdb/create! coerced-db k v1))))
+      (is (= [v1 v2]
+             (map kvdb/value (kvdb/set-values! coerced-db k v2))))
+
+      [primary-db (kvdb/pop-overrides coerced-db)
+       primary-v (kvdb/fetch primary-db k)]
+      (is (= [:edn] (keys primary-v)))
+      (is (string? (:edn primary-v)))
+      (is (= v2 (read-string (:edn primary-v))))
+      )))
+
+(def coerced-treemap-context
+  (gen/let [data (gen/fmap #(into (sorted-map) (fmap-vals ednize-value %))
+                           (kvdb-gen/data))]
+    (fn [prop]
+      (prop {:kvdb (kvdb/coerced (kvdb/to-kvdb data)
+                                 read-edn-value
+                                 ednize-value)}))))
+
+
+(defspec coerced-treemap-readable-properties
+  (v/within-context coerced-treemap-context v/readable-kvdb-properties))
+
+(defspec coerced-treemap-pageable-properties
+  (v/within-context coerced-treemap-context v/pageable-kvdb-properties))
+
+(defspec coerced-treemap-overridable-properties
+  (v/within-context coerced-treemap-context v/overridable-kvdb-properties))

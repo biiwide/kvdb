@@ -2,7 +2,10 @@
   (:refer-clojure :exclude [key remove replace])
   (:require [biiwide.kvdb.protocols :as proto]
             [clojure.core :as core]
-            [clojure.spec.alpha :as s]))
+            [clojure.spec.alpha :as s])
+  (:import (biiwide.kvdb.protocols ReadableKVDB
+                                   MutableKVDB
+                                   PageableKVDB)))
 
 
 (defmacro ^:private maybe
@@ -87,6 +90,23 @@
              ::key key
              ::revision revision))
 
+
+(s/fdef fmap-entry
+  :args (s/cat :fn ifn? :entry ::entry)
+  :ret  ::entry
+  :fn   (s/and #(= (key (:entry (:args %)))
+                   (key (:ret %)))
+               #(= (revision (:entry (:args %)))
+                   (revision (:ret %)))))
+
+(defn fmap-entry
+  "Apply a function the value of an entry."
+  [f ent]
+  (entry (key ent)
+         (f (value ent))
+         (revision ent)))
+
+
 (s/fdef kvdb?
   :args (s/cat :any any?)
   :ret  boolean?)
@@ -153,7 +173,7 @@ when the entry is not found."
 
 (s/fdef entries
   :args (s/cat :kvdb ::readable-kvdb)
-  :ret  (s/every ::entry))
+  :ret  (s/nilable (s/every ::entry)))
 
 (defn entries
   "Return a sequence of all entries in a ReadableKVDB."
@@ -222,6 +242,23 @@ number matches the revision number provided."
   (proto/replace! mutable-kvdb key revision new-value))
 
 
+(s/def ::action
+  #{::create! ::replace! ::remove!})
+
+
+(s/fdef precondition-exception?
+  :args (s/cat :any any?)
+  :ret  boolean?)
+
+(defn precondition-exception?
+  [ex]
+  (isa? (:type (ex-data ex))
+        ::precondition-failure))
+
+
+(derive ::key-collision ::precondition-failure)
+
+
 (s/fdef key-collision-exception?
   :args (s/cat :any any?)
   :ret  boolean?)
@@ -232,8 +269,6 @@ number matches the revision number provided."
   (= ::key-collision
      (:type (ex-data ex))))
 
-(s/def ::action
-  #{::create! ::replace! ::remove!})
 
 (s/fdef key-collision
   :args (s/cat :kvdb ::kvdb :action ::action :key ::key)
@@ -248,6 +283,9 @@ This exception is thrown when attempting to create! a new entry."
             :kvdb   kvdb
             :action action
             :key    k}))
+
+
+(derive ::revision-mismatch ::precondition-failure)
 
 
 (s/fdef revision-mismatch-exception?
@@ -286,6 +324,9 @@ the entry has occured."
             :expected-revision expected-rev}))
 
 
+(derive ::key-not-found ::precondition-failure)
+
+
 (s/fdef key-not-found-exception?
   :args (s/cat :any any?)
   :ret  boolean?)
@@ -315,9 +356,9 @@ remove! an entry that does not exist."
             :key    k}))
 
 
-(defn ^:private exception?
+(definline ^:private exception?
   [x]
-  (instance? Exception x))
+  `(instance? Exception ~x))
 
 
 (s/fdef exceeded-transact-attempts-exception?
@@ -369,7 +410,7 @@ concurrent modifications."
   :args (s/cat :any any?)
   :ret  removal?)
 
-(definline removal
+(defn removal
   "Returns a token indicating a transacted value should be removed.
 Examples:
  (kvdb/transact! db \"abc\" kvdb/removal)
@@ -393,21 +434,19 @@ Examples:
             [nil nil]
             (try [nil (create! kvdb k new-val)]
               (catch Exception ex
-                (cond (key-collision-exception? ex) ex
+                (cond (precondition-exception? ex) ex
                       :else (throw ex)))))
           (removal? new-val)
           (try [(remove! kvdb k (revision ent)) nil]
             (catch Exception ex
-              (cond (revision-mismatch-exception? ex) ex
-                    (key-not-found-exception? ex) ex
+              (cond (precondition-exception? ex) ex
                     :else (throw ex))))
           (= old-val new-val)
           [old-val old-val]
           :else
           (try [ent (replace! kvdb k (revision ent) new-val)]
             (catch Exception ex
-              (cond (revision-mismatch-exception? ex) ex
-                    (key-not-found-exception? ex) ex
+              (cond (precondition-exception? ex) ex
                     :else (throw ex)))))))
 
 
@@ -431,6 +470,15 @@ Examples:
                     :missing (nil? ret-val)))))
 
 (defn transact-values!
+  "Atomically updates the value of an entry in a KVDB instance.
+  The new value will be (apply f current-value-of-entry args). The
+  trasacting function f may be called multiple times and should be
+  free of side effects.
+  When an entry is not present, the current-value-of-entry will be nil.
+  To remove an entry f can return (removal).
+  Returns [old-entry new-entry], the state of the entry before and
+  after the update.
+  Analogous to clojure.core/swap-vals!."
   ([kvdb k f a]
    (transact-values! kvdb k #(f % a)))
   ([kvdb k f a b]
@@ -467,7 +515,59 @@ Examples:
 
 
 (def transact!
+  "Atomically updates the value of an entry in a KVDB instance.
+  The new value will be (apply f current-value-of-entry args). The
+  trasacting function f may be called multiple times and should be
+  free of side effects.
+  Returns the new, updated state of the entry.
+  Analogous to clojure.core/swap!."
   (comp second transact-values!))
+
+
+(s/fdef set-values!
+  :args (s/cat :kvdb ::mutable-kvdb
+               :key  ::key
+               :val  ::value)
+  :ret  (s/cat :old-entry (maybe ::entry)
+               :new-entry ::entry)
+  :fn   (s/and #(let [[tag old-entry] (:old-entry (:ret %))]
+                  (case tag
+                    :value   (= (:key (:args %)) (key old-entry))
+                    :missing (nil? old-entry)))
+               #(let [new-entry (:new-entry (:ret %))]
+                  (and (= (:key (:args %)) (key new-entry))
+                       (= (:val (:args %)) (value new-entry))))))
+
+
+(defn set-values!
+  "Set the value for a key in the database without regard for the
+  current state of the entry.
+  Returns [old-entry new-entry], the state of the entry before and
+  after it was set.
+  Equivalent to (transact-values! kvdb k (constantly v)).
+  Analogous to clojure.core/reset-vals!."
+  [kvdb k v]
+  (transact-values! kvdb k (constantly v)))
+
+
+(s/fdef set!
+  :args (s/cat :kvdb ::mutable-kvdb
+               :key  ::key
+               :val  ::value)
+  :ret  ::entry
+  :fn   #(let [ret-val (:ret %)]
+           (and (= (:key (:args %)) (key ret-val))
+                (= (:val (:args %)) (value ret-val)))))
+
+
+(def set!
+  "Set the value for a key in the database without regard for the
+  current state of the entry.
+  Returns [old-entry new-entry], the state of the entry before and
+  after it was set.
+  Equivalent to (transact! kvdb k (constantly v)).
+  Analogous to clojure.core/reset!."
+  (comp second set-values!))
 
 
 (defmacro with-max-transact-attempts
@@ -529,6 +629,7 @@ first entry."
   :ret  (s/every ::entry))
 
 (defn pageseq
+  "Returns a lazy sequence of entries using page."
   ([pageable-kvdb]
    (pageseq pageable-kvdb nil nil))
   ([pageable-kvdb exclusive-start-key page-limit]
@@ -545,43 +646,93 @@ first entry."
   :ret  boolean?)
 
 (defn overridable-kvdb?
+  "Check if a KVDB instance supports the OverridableKVDB protocol."
   [x]
   (and (readable-kvdb? x)
-       (proto/overridable-kvdb? x)))
+       (proto/overridable-kvdb? x)
+       (not (instance? ReadableKVDB x))))
 
 (s/def ::overridable-kvdb overridable-kvdb?)
 
 
-(s/def ::readable-kvdb-method
+(def ^:private readable-kvdb-methods
   #{`proto/fetch
     `proto/entries})
 
-(s/def ::mutable-kvdb-method
+(s/def ::overridable-readable-kvdb-method
+  readable-kvdb-methods)
+
+(def ^:private mutable-kvdb-methods
   #{`proto/create!
     `proto/remove!
     `proto/replace!})
 
-(s/def ::pageable-kvdb-method
+(s/def ::overridable-mutable-kvdb-method
+  mutable-kvdb-methods)
+
+(def ^:private pageable-kvdb-methods
   #{`proto/page})
 
-(s/def ::protocol-method
-  (s/or :readable-kvdb-method ::readable-kvdb-method
-        :mutable-kvdb-method  ::mutable-kvdb-method
-        :pageable-kvdb-method ::pageable-kvdb-method))
+(s/def ::overridable-pageable-kvdb-method
+  pageable-kvdb-methods)
+
+(def ^:private overridable-kvdb-methods
+  (set (concat readable-kvdb-methods
+               mutable-kvdb-methods
+               pageable-kvdb-methods)))
+
+(s/def ::overridable-kvdb-method
+  overridable-kvdb-methods)
+
+
+(s/fdef select-overridable-methods
+  :args (s/cat :map map?)
+  :ret  map?)
+
+(defn select-overridable-methods
+  [m]
+  (select-keys m overridable-kvdb-methods))
+
+
+(s/fdef without-overridable-methods
+  :args (s/cat :map map?)
+  :ret  map?)
+
+(defn without-overridable-methods
+  [m]
+  (reduce dissoc m overridable-kvdb-methods))
 
 
 (s/fdef override
   :args (s/cat :kvdb ::overridable-kvdb
-               :impl (s/alt :single (s/cat :method ::protocol-method
+               :impl (s/alt :single (s/cat :method ::overridable-kvdb-method
                                            :impl   ifn?)
-                            :multiple (s/map-of ::protocol-method ifn?)))
+                            :multiple (s/map-of ::overridable-kvdb-method ifn?)))
   :ret  ::overridable-kvdb)
 
 (defn override
   ([kvdb protocol-method implementation]
    (override kvdb {protocol-method implementation}))
   ([kvdb implementations]
-   (proto/override kvdb implementations)))
+   (proto/push-overrides kvdb (select-overridable-methods implementations))))
+
+(s/fdef overridden
+  :args (s/cat :kvdb ::overridable-kvdb)
+  :ret  (s/map-of ::overridable-kvdb-method fn?))
+
+(defn overridden
+  [kvdb]
+  (when (overridable-kvdb? kvdb)
+    (select-overridable-methods (proto/overridden kvdb))))
+
+
+(s/fdef pop-overrides
+  :args (s/cat :kvdb ::overridable-kvdb)
+  :ret  ::overridable-kvdb)
+
+(defn pop-overrides
+  [kvdb]
+  (proto/pop-overrides kvdb))
 
 
 (defn ^:private enrich-map-entry
@@ -599,6 +750,7 @@ first entry."
 
 (def ^:private always-false
   (constantly false))
+
 
 (extend nil
   proto/KVDBEntry
@@ -657,7 +809,7 @@ first entry."
       (val e)
       missing-v))
   (entries [m]
-    (vals m)))
+    (or (vals m))))
 
 
 (extend-type clojure.lang.PersistentTreeMap
@@ -678,9 +830,115 @@ first entry."
             (vals m)))))
 
 
+(defn merge-overridden-methods
+  [metadata method-impls]
+  (merge metadata
+         method-impls
+         {::overrides-stack
+          (cons method-impls
+                (::overrides-stack metadata ))}))
+
+
+(defn pop-overridden-methods
+  [metadata]
+  (let [overrides-stack (::overrides-stack metadata [])]
+    (merge (reduce dissoc metadata (keys (first overrides-stack)))
+           (second overrides-stack)
+           {::overrides-stack (next overrides-stack)}
+           )))
+
 (extend-type clojure.lang.IObj
   proto/OverridableKVDB
   (overridable-kvdb? [x]
     (proto/readable-kvdb? x))
-  (override [kvdb implementations]
-    (vary-meta kvdb merge implementations)))
+  (push-overrides [kvdb implementations]
+    (vary-meta kvdb merge-overridden-methods implementations))
+  (overridden [kvdb]
+    (select-overridable-methods (meta kvdb)))
+  (pop-overrides [kvdb]
+    (vary-meta kvdb pop-overridden-methods)))
+
+
+(s/fdef resolve-protocol
+  :args (s/cat :symbol qualified-symbol?)
+  :ret  (s/or :nothing nil?
+              :var     var?))
+
+(defn ^:private resolve-protocol
+  [sym]
+  (when (symbol? sym)
+    (:protocol (meta (resolve sym)))))
+
+
+(def ^:private direct-methods
+  {`proto/fetch    (memfn ^ReadableKVDB fetch kvdb k missing-value)
+   `proto/entries  (memfn ^ReadableKVDB entries kvdb)
+   `proto/create!  (memfn ^MutableKVDB create! kvdb key value)
+   `proto/remove!  (memfn ^MutableKVDB remove! kvdb key revision)
+   `proto/replace! (memfn ^MutableKVDB replace! kvdb key revision new-value)
+   `proto/page     (memfn ^PageableKVDB page kvdb starting-key limit)
+    })
+
+
+(s/fdef find-implementation
+  :args (s/cat :kvdb kvdb?
+               :protocol-method ::overridable-kvdb-method)
+  :ret  (s/or :nothing nil?
+              :impl    fn?))
+
+(defn find-implementation
+  "Find the implementation of a protocol method for an object."
+  [kvdb protomethod]
+  (when-some [proto (resolve-protocol protomethod)]
+    (or (get (meta kvdb) protomethod)
+        (let [iface (:on-interface @proto)
+              method-name (name protomethod)]
+          (if (instance? iface kvdb)
+            (get direct-methods protomethod)
+            (find-protocol-method @proto (keyword method-name) kvdb))))))
+
+
+(defn coerced
+  "Construct a coerced KVDB.
+Values will be transformed with the coerce function
+after being read from the underlying KVDB, and by the
+uncoerce function when before being written to the KVDB."
+  ([kvdb {:keys [coerce uncoerce]}]
+   (coerced kvdb (or coerce identity)
+                 (or uncoerce identity)))
+  ([kvdb coerce uncoerce]
+   (if-not (overridable-kvdb? kvdb)
+     (throw (ex-info "Can only coerce an OverridableKVDB."
+                     {:kvdb kvdb
+                      :coerce coerce
+                      :uncoerce uncoerce}))
+     (let [coerce (partial fmap-entry coerce)]
+       (override kvdb
+         (merge
+           (when (readable-kvdb? kvdb)
+             {`proto/fetch   (let [f (find-implementation kvdb `proto/fetch)]
+                               (fn [kvdb k missing-value]
+                                 (let [v (f kvdb k missing-value)]
+                                   (if (identical? missing-value v)
+                                     missing-value
+                                     (coerce v)))))
+              `proto/entries (comp (partial map coerce)
+                                   (find-implementation kvdb `proto/entries))
+              })
+           (when (mutable-kvdb? kvdb)
+             {`proto/create!  (let [c! (find-implementation kvdb `proto/create!)]
+                                (fn [kvdb key value]
+                                  (coerce
+                                    (c! kvdb key (uncoerce value)))))
+              `proto/remove!  (comp coerce
+                                    (find-implementation kvdb `proto/remove!))
+              `proto/replace! (let [r! (find-implementation kvdb `proto/replace!)]
+                                (fn [kvdb key revision new-value]
+                                  (coerce
+                                    (r! kvdb key revision (uncoerce new-value)))))
+              })
+           (when (pageable-kvdb? kvdb)
+             {`proto/page (comp (partial map coerce)
+                                (find-implementation kvdb `proto/page))
+              })))))))
+

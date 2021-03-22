@@ -71,6 +71,12 @@
   proto/OverridableKVDB
   (overridable-kvdb? [a]
     (proto/readable-kvdb? @a))
-  (override [a implementations]
-    (atom @a :meta (merge (meta a) implementations)
-             :validator (get-validator a))))
+  (push-overrides [a implementations]
+    (atom @a :meta (kvdb/merge-overridden-methods (meta a) implementations)
+             :validator (get-validator a)))
+  (overridden [a]
+    (meta a))
+  (pop-overrides [a]
+    (atom @a :meta (kvdb/pop-overridden-methods (meta a))
+             :validator (get-validator a)))
+  )
