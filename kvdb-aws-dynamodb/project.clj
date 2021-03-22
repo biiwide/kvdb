@@ -1,4 +1,4 @@
-(defproject biiwide/kvdb-aws-dynamodb "0.1.0"
+(defproject biiwide/kvdb-aws-dynamodb "0.1.1-SNAPSHOT"
 
   :description "KVDB implementation(s) for AWS DynamoDB."
 
@@ -15,7 +15,7 @@
                   :exclusions [com.amazonaws/aws-java-sdk
                                com.amazonaws/amazon-kinesis-client
                                com.amazonaws/dynamodb-streams-kinesis-adapter]]
-                 [biiwide/kvdb-api "0.1.0"]
+                 [biiwide/kvdb-api "0.1.1-SNAPSHOT"]
                  [org.clojure/clojure "1.10.1"]]
 
   :repl-options {:init-ns biiwide.kvdb.aws.dynamodb}
