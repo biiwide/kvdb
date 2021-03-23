@@ -9,7 +9,7 @@
 
   :repositories {"dynamodb-local-oregon" "https://s3-us-west-2.amazonaws.com/dynamodb-local/release"}
 
-  :plugins [[biiwide/copy-deps "0.6.0"]]
+  :plugins [[biiwide/copy-deps "0.7.1"]]
 
   :dependencies [[amazonica "0.3.153"
                   :exclusions [com.amazonaws/aws-java-sdk

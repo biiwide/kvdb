@@ -316,7 +316,7 @@ both input and output using :args, :ret, & :fn specs."
      [kvdb]
      [new-key key-generator
       new-val (gen/such-that not-empty value-generator)
-      third   (gen/large-integer* {:min 1 :max 50})]
+      third   (gen/large-integer* {:min 1 :max 20})]
      (if-not (kvdb/mutable-kvdb? kvdb)
        true
        (and-let
