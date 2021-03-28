@@ -494,8 +494,7 @@ Examples:
        (if (pos? remaining-attempts)
          (let [result (apply-tx kvdb k f)]
            (if (exception? result)
-             (do (Thread/sleep 0 (rand-int 999))
-                 (recur (dec remaining-attempts) result))
+             (recur (dec remaining-attempts) result)
              result))
          (throw
            (exceeded-transact-attempts
@@ -652,6 +651,7 @@ first entry."
        (proto/overridable-kvdb? x)
        (not (instance? ReadableKVDB x))))
 
+
 (s/def ::overridable-kvdb overridable-kvdb?)
 
 
@@ -716,6 +716,7 @@ first entry."
   ([kvdb implementations]
    (proto/push-overrides kvdb (select-overridable-methods implementations))))
 
+
 (s/fdef overridden
   :args (s/cat :kvdb ::overridable-kvdb)
   :ret  (s/map-of ::overridable-kvdb-method fn?))
@@ -745,8 +746,10 @@ first entry."
              (format "Invalid value present (%s)." (type v)))))
   [k (entry k v 0)])
 
+
 (def ^:private always-nil
   (constantly nil))
+
 
 (def ^:private always-false
   (constantly false))
@@ -847,6 +850,7 @@ first entry."
            {::overrides-stack (next overrides-stack)}
            )))
 
+
 (extend-type clojure.lang.IObj
   proto/OverridableKVDB
   (overridable-kvdb? [x]
@@ -854,7 +858,7 @@ first entry."
   (push-overrides [kvdb implementations]
     (vary-meta kvdb merge-overridden-methods implementations))
   (overridden [kvdb]
-    (select-overridable-methods (meta kvdb)))
+    (meta kvdb))
   (pop-overrides [kvdb]
     (vary-meta kvdb pop-overridden-methods)))
 

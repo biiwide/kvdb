@@ -4,6 +4,45 @@
             [biiwide.kvdb.protocols :as proto]))
 
 
+(deftype Wrapper
+  [a _meta]
+  proto/KVDBable
+  (to-kvdb [aw] aw)
+
+  clojure.lang.IAtom
+  (swap [_ f] (.swap a f))
+  (swap [_ f x] (.swap a f x))
+  (swap [_ f x y] (.swap a f x y))
+  (swap [_ f x y args] (.swap a f x y args))
+  (compareAndSet [_ old-v new-v] (.compareAndSet old-v new-v))
+  (reset [_ new-v] (.reset a new-v))
+
+  clojure.lang.IAtom2
+  (swapVals [_ f] (.swapVals a f))
+  (swapVals [_ f x] (.swapVals a f x))
+  (swapVals [_ f x y] (.swapVals a f x y))
+  (swapVals [_ f x y args] (.swapVals a f x y args))
+  (resetVals [_ new-v] (.resetVals new-v))
+
+  clojure.lang.IDeref
+  (deref [_] (.deref a))
+
+  clojure.lang.IRef
+  (setValidator [_ vf] (.setValidator a vf))
+  (getValidator [_] (.getValidator a))
+  (getWatches [_] (.getWatches a))
+  (addWatch [_ k callback] (.addWatch a k callback))
+  (removeWatch [_ k] (.removeWatch a k))
+
+  clojure.lang.IMeta
+  (meta [aw] _meta)
+
+  clojure.lang.IObj
+  (withMeta [aw m] (Wrapper. a m)))
+
+(ns-unmap *ns* '->Wrapper)
+
+
 (defn ^:private do-create!
   [m k v]
   (if (nil? (proto/fetch m k nil))
@@ -33,11 +72,7 @@
           :else (assoc m k (kvdb/entry k new-v (inc rev))))))
 
 
-(extend-type clojure.lang.IAtom2
-  proto/KVDBable
-  (to-kvdb [a]
-    (atom (kvdb/to-kvdb @a)))
-
+(extend-type Wrapper
   proto/ReadableKVDB
   (readable-kvdb? [a]
     (proto/readable-kvdb? @a))
@@ -66,17 +101,21 @@
     (let [v @a]
       (if (proto/pageable-kvdb? v)
         (proto/page v exclusive-start-key limit)
-        (throw (RuntimeException. "Method not supported")))))
+        (throw (RuntimeException. "Method not supported"))))))
 
-  proto/OverridableKVDB
-  (overridable-kvdb? [a]
-    (proto/readable-kvdb? @a))
-  (push-overrides [a implementations]
-    (atom @a :meta (kvdb/merge-overridden-methods (meta a) implementations)
-             :validator (get-validator a)))
-  (overridden [a]
-    (meta a))
-  (pop-overrides [a]
-    (atom @a :meta (kvdb/pop-overridden-methods (meta a))
-             :validator (get-validator a)))
-  )
+
+(extend-type clojure.lang.IAtom2
+  proto/KVDBable
+  (to-kvdb [a] (Wrapper.
+                 (atom (kvdb/to-kvdb @a))
+                 (meta a))))
+
+
+(defmethod print-method Wrapper
+  [wrapper writer]
+  (.write writer "#biiwide.kvdb/atom[")
+  (print-method @wrapper writer)
+  (.write writer " 0x")
+  (.write writer (Integer/toHexString
+                   (System/identityHashCode wrapper)))
+  (.write writer "]"))
