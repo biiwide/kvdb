@@ -430,7 +430,8 @@ Examples:
         old-val (if missing? nil (value ent))
         new-val (f old-val)]
     (cond missing?
-          (if (removal? new-val)
+          (if (or (nil? new-val)
+                  (removal? new-val))
             [nil nil]
             (try [nil (create! kvdb k new-val)]
               (catch Exception ex

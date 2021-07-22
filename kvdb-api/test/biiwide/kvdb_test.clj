@@ -434,6 +434,15 @@
     ))
 
 
+(deftest transact-nil-values
+  (and-let
+    [db (kvdb/to-kvdb (atom {}))]
+    (is (= [nil nil]
+           (kvdb/transact-values! db "abc" identity)))
+    (is (= [nil nil]
+           (kvdb/transact-values! db "xyz" kvdb/removal)))))
+
+
 ;; HashMap
 (def hashmap-context
   (gen/let [kvdb (kvdb-gen/readable-kvdb)]
