@@ -41,7 +41,8 @@
     (let [{:keys [item]}
           (ddb/get-item (.credentials db)
                         {:table-name (.table-name db)
-                         :key {(.key-field db) k}})]
+                         :key {(.key-field db) k}
+                         :consistent-read true})]
       (if (some? item)
         ((.item-to-entry db) item)
         missing-v)))
