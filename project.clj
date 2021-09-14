@@ -4,12 +4,13 @@
 
   :url "https://github.com/biiwide/kvdb"
 
-  :license {:name "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
+  :license {:name "EPL-2.0"
             :url "https://www.eclipse.org/legal/epl-2.0/"}
 
   :packaging "pom"
 
   :plugins [[lein-codox "0.10.3"]
+            [lein-eftest "0.5.9"]
             [lein-sub "0.3.0"]]
 
   :codox {:output-path "codox"
@@ -25,7 +26,7 @@
 
   :release-tasks [["vcs" "assert-committed"]
                   ["change" "version" "leiningen.release/bump-version" "release"]
-                  ["modules" "change" "version" "leiningen.release/bump-version" "release"]
+                  ["sub" "change" "version" "leiningen.release/bump-version" "release"]
                   #_["vcs" "commit"]
                   #_["vcs" "tag" "--no-sign"]
                   #_["modules" "deploy" "clojars"]

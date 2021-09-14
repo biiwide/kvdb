@@ -4,7 +4,7 @@
 
   :url "https://github.com/biiwide/kvdb"
 
-  :license {:name "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
+  :license {:name "EPL-2.0"
             :url "https://www.eclipse.org/legal/epl-2.0/"}
 
   :repositories {"dynamodb-local-oregon" "https://s3-us-west-2.amazonaws.com/dynamodb-local/release"}
