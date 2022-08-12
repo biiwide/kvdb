@@ -1,4 +1,4 @@
-(defproject biiwide/kvdb-parent "0.1.2"
+(defproject biiwide/kvdb-parent "0.1.3-SNAPSHOT"
 
   :description "A reusable protocol for KeyValue DataBases."
 
@@ -9,7 +9,8 @@
 
   :packaging "pom"
 
-  :plugins [[lein-codox "0.10.3"]
+  :plugins [[lein-ancient "1.0.0-RC3"]
+            [lein-codox "0.10.3"]
             [lein-eftest "0.5.9"]
             [lein-sub "0.3.0"]]
 
