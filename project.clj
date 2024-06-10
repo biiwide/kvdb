@@ -1,4 +1,4 @@
-(defproject biiwide/kvdb-parent "0.1.3-SNAPSHOT"
+(defproject biiwide/kvdb-parent "0.1.4-SNAPSHOT"
 
   :description "A reusable protocol for KeyValue DataBases."
 
@@ -28,11 +28,11 @@
   :release-tasks [["vcs" "assert-committed"]
                   ["change" "version" "leiningen.release/bump-version" "release"]
                   ["sub" "change" "version" "leiningen.release/bump-version" "release"]
-                  #_["vcs" "commit"]
-                  #_["vcs" "tag" "--no-sign"]
-                  #_["modules" "deploy" "clojars"]
+                  ["vcs" "commit"]
+                  ["vcs" "tag" "--no-sign"]
+                  ["sub" "deploy" "clojars"]
                   ["change" "version" "leiningen.release/bump-version"]
-                  #_["modules" "change" "version" "leiningen.release/bump-version"]
-                  #_["vcs" "commit"]
-                  #_["vcs" "push"]]
+                  ["sub" "change" "version" "leiningen.release/bump-version"]
+                  ["vcs" "commit"]
+                  ["vcs" "push"]]
   )
