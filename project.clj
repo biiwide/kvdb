@@ -30,10 +30,9 @@
                   ["sub" "change" "version" "leiningen.release/bump-version" "release"]
                   ["vcs" "commit"]
                   ["vcs" "tag" "--no-sign"]
-                  ["deploy" "clojars"]
                   ["sub" "deploy" "clojars"]
                   ["change" "version" "leiningen.release/bump-version"]
                   ["sub" "change" "version" "leiningen.release/bump-version"]
                   ["vcs" "commit"]
-                  #_["vcs" "push"]]
+                  ["vcs" "push"]]
   )
