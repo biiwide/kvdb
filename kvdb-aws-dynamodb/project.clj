@@ -12,11 +12,13 @@
   :plugins [[biiwide/copy-deps "0.7.1"]
             [lein-ancient "1.0.0-RC3"]]
 
-  :dependencies [[amazonica "0.3.161"
+  :dependencies [[amazonica "0.3.166"
                   :exclusions [com.amazonaws/aws-java-sdk
                                com.amazonaws/amazon-kinesis-client
-                               com.amazonaws/dynamodb-streams-kinesis-adapter]]
+                               com.amazonaws/dynamodb-streams-kinesis-adapter
+                               com.taoensso/nippy]]
                  [biiwide/kvdb-api "0.1.2"]
+                 [com.amazonaws/aws-java-sdk-dynamodb "1.12.739"]
                  [org.clojure/clojure "1.10.3" :scope "provided"]]
 
   :repl-options {:init-ns biiwide.kvdb.aws.dynamodb}
