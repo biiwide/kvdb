@@ -3,7 +3,8 @@
             [biiwide.kvdb :as kvdb]
             [biiwide.kvdb.protocols :as proto]
             [clojure.spec.alpha :as s])
-  (:import  [com.amazonaws.services.dynamodbv2.model ConditionalCheckFailedException]))
+  (:import  (com.amazonaws.auth AWSCredentialsProvider)
+            (com.amazonaws.services.dynamodbv2.model ConditionalCheckFailedException)))
 
 
 (defn ^:private scan-all
@@ -110,7 +111,9 @@
   (s/or :string string?
         :keyword simple-keyword?))
 
-(s/def ::credentials (s/nilable map?))
+(s/def ::credentials (s/or :nil nil?
+                           :map map?
+                           :aws-credentials-provider #(instance? AWSCredentialsProvider %)))
 (s/def ::table-name  ::dynamodb-ident)
 (s/def ::key-field ::dynamodb-ident)
 (s/def ::revision-field ::dynamodb-ident)
