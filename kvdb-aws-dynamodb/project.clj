@@ -1,4 +1,4 @@
-(defproject biiwide/kvdb-aws-dynamodb "0.1.4-SNAPSHOT"
+(defproject biiwide/kvdb-aws-dynamodb "0.1.4"
 
   :description "KVDB implementation(s) for AWS DynamoDB."
 
