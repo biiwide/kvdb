@@ -1,4 +1,4 @@
-(defproject biiwide/kvdb-api "0.1.4"
+(defproject biiwide/kvdb-api "0.1.5-SNAPSHOT"
 
   :description "A reusable protocol for KeyValue DataBases."
 

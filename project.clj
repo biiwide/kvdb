@@ -1,4 +1,4 @@
-(defproject biiwide/kvdb-parent "0.1.4"
+(defproject biiwide/kvdb-parent "0.1.5-SNAPSHOT"
 
   :description "A reusable protocol for KeyValue DataBases."
 
